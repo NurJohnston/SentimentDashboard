@@ -10,6 +10,9 @@ from datetime import datetime
 app = Flask(__name__)
 app.secret_key = os.urandom(24)  # Secret key for sessions
 
+# Store session analysis history for speed chart
+session_analyses = {}  # {user_id: [{'vader_ms': 12, 'hf_ms': 45, 'timestamp': ...}]}
+
 
 # Database setup
 def init_db():
@@ -18,73 +21,26 @@ def init_db():
 
     # Users table
     c.execute('''CREATE TABLE IF NOT EXISTS users
-                 (
-                     id
-                     INTEGER
-                     PRIMARY
-                     KEY
-                     AUTOINCREMENT,
-                     username
-                     TEXT
-                     UNIQUE
-                     NOT
-                     NULL,
-                     password
-                     TEXT
-                     NOT
-                     NULL,
-                     created_at
-                     TIMESTAMP
-                     DEFAULT
-                     CURRENT_TIMESTAMP
-                 )''')
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  username TEXT UNIQUE NOT NULL,
+                  password TEXT NOT NULL,
+                  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
 
     # Analysis history table
     c.execute('''CREATE TABLE IF NOT EXISTS analyses
-    (
-        id
-        INTEGER
-        PRIMARY
-        KEY
-        AUTOINCREMENT,
-        user_id
-        INTEGER
-        NOT
-        NULL,
-        text
-        TEXT
-        NOT
-        NULL,
-        vader_sentiment
-        TEXT
-        NOT
-        NULL,
-        vader_positive
-        REAL,
-        vader_negative
-        REAL,
-        vader_neutral
-        REAL,
-        vader_compound
-        REAL,
-        hf_sentiment
-        TEXT
-        NOT
-        NULL,
-        hf_confidence
-        REAL,
-        created_at
-        TIMESTAMP
-        DEFAULT
-        CURRENT_TIMESTAMP,
-        FOREIGN
-        KEY
-                 (
-        user_id
-                 ) REFERENCES users
-                 (
-                     id
-                 ))''')
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  user_id INTEGER NOT NULL,
+                  text
+                  TEXT NOT NULL,
+                  vader_sentiment TEXT NOT NULL,
+                  vader_positive REAL,
+                  vader_negative REAL,
+                  vader_neutral REAL,
+                  vader_compound REAL,
+                  hf_sentiment TEXT NOT NULL,
+                  hf_confidence REAL,
+                  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                  FOREIGN KEY (user_id) REFERENCES users (id))''')
 
     conn.commit()
     conn.close()
@@ -152,7 +108,7 @@ def save_analysis(user_id, text, vader_result, hf_result):
 
 
 def get_user_stats(user_id):
-    """Get statistics for a user"""
+    """Get statistics for a user with all metrics"""
     conn = sqlite3.connect('sentiment.db')
     c = conn.cursor()
 
@@ -164,11 +120,11 @@ def get_user_stats(user_id):
     c.execute("SELECT vader_sentiment, COUNT(*) FROM analyses WHERE user_id = ? GROUP BY vader_sentiment", (user_id,))
     breakdown = {row[0]: row[1] for row in c.fetchall()}
 
-    # Recent analyses (last 10)
+    # Recent analyses (last 10) with ALL metrics
     c.execute(
-        "SELECT text, vader_sentiment, hf_sentiment, created_at FROM analyses WHERE user_id = ? ORDER BY created_at DESC LIMIT 10",
+        "SELECT text, vader_sentiment, vader_positive, vader_negative, vader_neutral, vader_compound, hf_sentiment, hf_confidence, created_at FROM analyses WHERE user_id = ? ORDER BY created_at DESC LIMIT 10",
         (user_id,))
-    recent = [{"text": row[0], "vader": row[1], "hf": row[2], "date": row[3]} for row in c.fetchall()]
+    recent = [{"text": row[0], "vader": row[1], "vader_positive": row[2], "vader_negative": row[3], "vader_neutral": row[4], "vader_compound": row[5], "hf": row[6], "hf_confidence": row[7], "date": row[8]} for row in c.fetchall()]
 
     conn.close()
     return {"total": total, "breakdown": breakdown, "recent": recent}
@@ -178,7 +134,7 @@ def get_user_stats(user_id):
 def index():
     if 'user_id' not in session:
         return redirect(url_for('login'))
-    return render_template('index.html')
+    return render_template('index.html', username=session.get('username'))
 
 
 @app.route('/login', methods=['GET', 'POST'])
@@ -225,6 +181,9 @@ def register():
 
 @app.route('/logout')
 def logout():
+    # Clear session history for this user
+    if 'user_id' in session:
+        session_analyses.pop(session['user_id'], None)
     session.clear()
     return redirect(url_for('login'))
 
@@ -246,6 +205,19 @@ def analyze():
     # Save to database
     save_analysis(session['user_id'], text, vader_result, hf_result)
 
+    # Track session history for speed chart
+    user_id = session['user_id']
+    if user_id not in session_analyses:
+        session_analyses[user_id] = []
+    session_analyses[user_id].append({
+        'vader_ms': vader_result['speed_ms'],
+        'hf_ms': hf_result['speed_ms'],
+        'timestamp': datetime.now().strftime('%H:%M:%S')
+    })
+    # Keep only last 10 for chart
+    if len(session_analyses[user_id]) > 10:
+        session_analyses[user_id] = session_analyses[user_id][-10:]
+
     results = {
         'text': text,
         'vader': vader_result,
@@ -264,13 +236,28 @@ def history():
     return render_template('history.html', stats=stats, username=session['username'])
 
 
+@app.route('/session-history')
+def session_history():
+    """Get current session's analysis history for speed chart"""
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+
+    user_id = session['user_id']
+    history = session_analyses.get(user_id, [])
+    return jsonify(history)
+
+
 if __name__ == '__main__':
     print("=" * 60)
-    print("📊 Sentiment Analysis Dashboard Starting...")
+    print("Sentiment Analysis Dashboard Starting...")
     print("=" * 60)
-    print("\n📍 http://127.0.0.1:5000")
+    print("\nhttp://127.0.0.1:5000")
     print("\nModels loaded:")
-    print("  ✅ VADER (rule-based)")
-    print("  ✅ Hugging Face (transformer)")
+    print("VADER (rule-based)")
+    print("Hugging Face (transformer)")
+    print("\nFeatures:")
+    print("User accounts with SQLite database")
+    print("Session-based speed tracking (last 10 analyses)")
+    print("Full metrics in history page")
     print("\nPress Ctrl+C to stop\n")
     app.run(debug=True, port=5000)
