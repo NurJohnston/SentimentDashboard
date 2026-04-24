@@ -30,8 +30,7 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS analyses
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   user_id INTEGER NOT NULL,
-                  text
-                  TEXT NOT NULL,
+                  text TEXT NOT NULL,
                   vader_sentiment TEXT NOT NULL,
                   vader_positive REAL,
                   vader_negative REAL,
@@ -108,7 +107,6 @@ def save_analysis(user_id, text, vader_result, hf_result):
 
 
 def get_user_stats(user_id):
-    """Get statistics for a user with all metrics"""
     conn = sqlite3.connect('sentiment.db')
     c = conn.cursor()
 
@@ -120,9 +118,9 @@ def get_user_stats(user_id):
     c.execute("SELECT vader_sentiment, COUNT(*) FROM analyses WHERE user_id = ? GROUP BY vader_sentiment", (user_id,))
     breakdown = {row[0]: row[1] for row in c.fetchall()}
 
-    # Recent analyses (last 10) with ALL metrics
+    # ALL analyses (removed LIMIT 10)
     c.execute(
-        "SELECT text, vader_sentiment, vader_positive, vader_negative, vader_neutral, vader_compound, hf_sentiment, hf_confidence, created_at FROM analyses WHERE user_id = ? ORDER BY created_at DESC LIMIT 10",
+        "SELECT text, vader_sentiment, vader_positive, vader_negative, vader_neutral, vader_compound, hf_sentiment, hf_confidence, created_at FROM analyses WHERE user_id = ? ORDER BY created_at DESC",
         (user_id,))
     recent = [{"text": row[0], "vader": row[1], "vader_positive": row[2], "vader_negative": row[3], "vader_neutral": row[4], "vader_compound": row[5], "hf": row[6], "hf_confidence": row[7], "date": row[8]} for row in c.fetchall()]
 
@@ -258,6 +256,6 @@ if __name__ == '__main__':
     print("\nFeatures:")
     print("User accounts with SQLite database")
     print("Session-based speed tracking (last 10 analyses)")
-    print("Full metrics in history page")
+    print("Full metrics in history page (ALL analyses)")
     print("\nPress Ctrl+C to stop\n")
     app.run(debug=True, port=5000)
